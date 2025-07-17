@@ -21,13 +21,13 @@ Workflow:
 4. When status is 'success', use the returned file_id to get the video URL via the File (Retrieve) API.
 5. Download the video to the output directory.
 
-Required parameters: model, prompt, duration, resolution, prompt_optimizer
+Required parameters: model, prompt, duration, resolution, first_frame_image
 """
 
 load_dotenv(dotenv_path=".env")
 
 def encode_image_to_base64(image_path: str) -> str:
-    import os
+    """Encode image file to base64 data URL."""
     ext = os.path.splitext(image_path)[1].lower()
     if ext in ['.jpg', '.jpeg']:
         mime = 'image/jpeg'
@@ -54,41 +54,8 @@ class HailouVideoGenerator:
             "Content-Type": "application/json"
         }
 
-    def create_video_generation_request(self, prompt: str, model: str, duration: int, resolution: str, prompt_optimizer: bool, subject_ref: Optional[str] = None) -> Dict[str, Any]:
-        payload = {
-            "model": model,
-            "prompt": prompt,
-            "duration": duration,
-            "resolution": resolution,
-            "prompt_optimizer": prompt_optimizer
-        }
-        if model == "S2V-01" and subject_ref:
-            # subject_reference expects a base64 string or URL in an array
-            if os.path.isfile(subject_ref):
-                encoded_img = encode_image_to_base64(subject_ref)
-                payload["subject_reference"] = [{"type": "character", "image": [encoded_img]}]
-            else:
-                payload["subject_reference"] = [{"type": "character", "image": [subject_ref]}]
-        return payload
-
-    def submit_video_generation(self, prompt: str, model: str, duration: int, resolution: str, prompt_optimizer: bool, subject_ref: Optional[str] = None) -> Dict[str, Any]:
-        payload = self.create_video_generation_request(prompt, model, duration, resolution, prompt_optimizer, subject_ref)
-        print(f"Submitting video generation request...\nModel: {model}\nPrompt: {prompt[:100]}...\nDuration: {duration}s, Resolution: {resolution}, Optimizer: {prompt_optimizer}")
-        if model == "S2V-01" and subject_ref:
-            print(f"Subject reference image provided: {subject_ref}")
-            print("[DEBUG] Payload for S2V-01:")
-            print(json.dumps(payload, indent=2)[:1000])
-        response = requests.post(
-            self.base_url,
-            headers=self.headers,
-            data=json.dumps(payload),
-            timeout=30
-        )
-        if response.status_code != 200:
-            raise Exception(f"Hailou API error: {response.status_code} - {response.text}")
-        return response.json()
-
     def poll_video_status(self, task_id: str, max_wait_time: int = 600) -> Dict[str, Any]:
+        """Poll the status of a video generation task."""
         start_time = time.time()
         while time.time() - start_time < max_wait_time:
             try:
@@ -119,7 +86,7 @@ class HailouVideoGenerator:
         raise TimeoutError(f"Video generation timed out after {max_wait_time} seconds")
 
     def get_video_url_from_file_id(self, file_id: str, group_id: str = "1944913641618805059", retries: int = 5, delay: int = 10) -> str:
-        # File (Retrieve) API: GET https://api.minimax.io/v1/files/retrieve?GroupId={group_id}&file_id={file_id}
+        """Get video URL from file ID using the File (Retrieve) API."""
         url = f"https://api.minimax.io/v1/files/retrieve?GroupId={group_id}&file_id={file_id}"
         for attempt in range(retries):
             response = requests.get(url, headers=self.headers, timeout=30)
@@ -133,6 +100,7 @@ class HailouVideoGenerator:
         raise Exception(f"File API error: {response.status_code} - {response.text}")
 
     def download_video(self, video_url: str, output_path: str) -> str:
+        """Download video from URL to local file."""
         print(f"Downloading video from {video_url}...")
         response = requests.get(video_url, stream=True)
         response.raise_for_status()
@@ -143,16 +111,16 @@ class HailouVideoGenerator:
         return output_path
 
 def load_analysis_results(json_file: str) -> List[Dict[str, Any]]:
+    """Load analysis results from JSON file."""
     with open(json_file, 'r', encoding='utf-8') as f:
         return json.load(f)
 
 def format_prompt_for_hailou(segment_data: Dict[str, Any]) -> str:
+    """Format segment data for Hailou API."""
     return segment_data["summary"].strip()
 
 def extract_last_frame(video_path: str, output_image_path: str) -> None:
-    """
-    Extracts the last frame of a video using ffmpeg and saves it as output_image_path.
-    """
+    """Extract the last frame of a video using ffmpeg and save it as output_image_path."""
     cmd = [
         "ffmpeg", "-y", "-sseof", "-0.1", "-i", video_path, "-vframes", "1", output_image_path
     ]
@@ -162,10 +130,11 @@ def extract_last_frame(video_path: str, output_image_path: str) -> None:
         raise RuntimeError(f"Failed to extract last frame from {video_path}: {e.stderr.decode()}")
 
 def generate_image_with_subject_reference(prompt_file: str, subject_ref: str, api_key: str, output_path: str = "generated_image.png", aspect_ratio: str = "16:9"):
-    """Generate an image using MiniMax image API with a prompt and subject reference, and save the result."""
+    """Generate an image using MiniMax image API with a prompt and subject reference."""
     url = "https://api.minimax.io/v1/image_generation"
     with open(prompt_file, "r", encoding="utf-8") as f:
         prompt = f.read().strip()
+    
     # Prepare subject reference (base64 or URL)
     if os.path.isfile(subject_ref):
         ext = os.path.splitext(subject_ref)[1].lower()
@@ -188,34 +157,33 @@ def generate_image_with_subject_reference(prompt_file: str, subject_ref: str, ap
             "type": "character",
             "image_file": subject_ref
         }]
+    
     payload = {
         "model": "image-01",
         "prompt": prompt,
         "aspect_ratio": "9:16",
         "response_format": "url",
         "n": 1,
-        "prompt_optimizer": False,
+        "prompt_optimizer": True,
         "subject_reference": subject_reference
     }
-    # Debug prints
-    print("Prompt length:", len(prompt))
-    print("Prompt:", prompt)
-    print("Subject reference type:", type(subject_reference[0]["image_file"]))
-    print("Subject reference length:", len(subject_reference[0]["image_file"]))
-    print("Aspect ratio:", aspect_ratio)
-    print("Payload:", json.dumps(payload, indent=2))
+    
     headers = {
         'Authorization': f'Bearer {api_key}',
         'Content-Type': 'application/json'
     }
+    
     response = requests.post(url, headers=headers, data=json.dumps(payload))
     if response.status_code != 200:
         raise Exception(f"Image API error: {response.status_code} - {response.text}")
+    
     data = response.json()
     if not isinstance(data.get("data"), dict) or not data["data"].get("image_urls"):
         print("Image generation API response:", json.dumps(data, indent=2))
         raise Exception(f"No image URL in response: {data}")
+    
     image_url = data["data"]["image_urls"][0]
+    
     # Download the image
     img_resp = requests.get(image_url)
     img_resp.raise_for_status()
@@ -230,6 +198,7 @@ def generate_videos_from_analysis(
     api_key: Optional[str] = None,
     subject_ref: Optional[str] = None
 ):
+    """Generate videos from analysis results using Hailou API."""
     # Ensure output directory exists at the very start
     os.makedirs(output_dir, exist_ok=True)
     segments = load_analysis_results(analysis_file)
@@ -237,143 +206,110 @@ def generate_videos_from_analysis(
         segments = segments[:num_segments]
     generator = HailouVideoGenerator(api_key)
     generated_videos = []
-    last_frame_path = None
+    
     for i, segment in enumerate(segments):
-        # Ensure output directory exists before each segment (in case of parallel or external deletion)
+        # Ensure output directory exists before each segment
         os.makedirs(output_dir, exist_ok=True)
         print(f"\n{'='*60}")
         print(f"Processing segment {i+1}/{len(segments)}")
         print(f"Time range: {segment['start']:.2f}s - {segment['end']:.2f}s")
         print(f"{'='*60}")
+        
         prompt = format_prompt_for_hailou(segment)
         print(f"Formatted prompt: {prompt}")
+        
         try:
+            model = "MiniMax-Hailuo-02"
+            duration = 10
+            resolution = "768P"
+            
+            # For first segment, use the provided subject reference
             if i == 0:
-                model = "I2V-01-Director"
-                duration = 6
-                resolution = "768P"
-                # Ensure subject_ref is provided
                 if not subject_ref:
-                    raise ValueError("--subject-ref is required for the first segment (I2V-01)")
-                # Use the image provided via --subject-ref as first_frame_image
+                    raise ValueError("--subject-ref is required for the first segment")
                 if os.path.isfile(subject_ref):
                     first_frame_image = encode_image_to_base64(subject_ref)
                 else:
                     first_frame_image = subject_ref
-                payload = {
-                    "model": model,
-                    "prompt": prompt,
-                    "duration": duration,
-                    "resolution": resolution,
-                    "prompt_optimizer": False,
-                    "first_frame_image": first_frame_image
-                }
-                print(f"Submitting video generation request...\nModel: {model}\nPrompt: {prompt[:100]}...\nDuration: {duration}s, Resolution: {resolution}, Optimizer: True")
-                print("[DEBUG] Payload for I2V-01:")
-                print(json.dumps(payload, indent=2)[:1000])
-                response = requests.post(
-                    generator.base_url,
-                    headers=generator.headers,
-                    data=json.dumps(payload),
-                    timeout=30
-                )
-                if response.status_code != 200:
-                    raise Exception(f"Hailou API error: {response.status_code} - {response.text}")
-                response = response.json()
-                task_id = response.get("task_id")
-                if not task_id:
-                    print(f"Error: No task_id in response: {response}")
-                    continue
-                print(f"Task ID: {task_id}")
-                status_data = generator.poll_video_status(task_id)
-                file_id = status_data.get("file_id")
-                if not file_id:
-                    print(f"Error: No file_id in status response: {status_data}")
-                    continue
-                video_url = generator.get_video_url_from_file_id(file_id)
-                video_path = os.path.join(output_dir, f"segment_{i:03d}_{segment['start']}s_{segment['end']}s.mp4")
-                generator.download_video(video_url, video_path)
-                print(f"✅ Successfully generated video: {video_path}")
-                generated_videos.append({
-                    "segment": i,
-                    "start": segment["start"],
-                    "end": segment["end"],
-                    "prompt": prompt,
-                    "video_path": video_path,
-                    "video_url": video_url,
-                    "file_id": file_id,
-                    "task_id": task_id
-                })
-                print("Waiting 5 seconds before next request...")
-                time.sleep(5)
             else:
-                model = "I2V-01"
-                duration = 6
-                resolution = "768P"
-                # Extract last frame from previous video
+                # For subsequent segments, extract last frame from previous video
                 prev_video_path = generated_videos[-1]["video_path"]
                 last_frame_path = os.path.join(output_dir, f"segment_{i-1:03d}_last_frame.png")
                 extract_last_frame(prev_video_path, last_frame_path)
-                # Prepare payload for I2V-01
                 with open(last_frame_path, "rb") as img_file:
                     first_frame_image_b64 = base64.b64encode(img_file.read()).decode("utf-8")
-                first_frame_image_b64 = f"data:image/png;base64,{first_frame_image_b64}"
-                payload = {
-                    "model": model,
-                    "prompt": prompt,
-                    "duration": duration,
-                    "resolution": resolution,
-                    "prompt_optimizer": False,
-                    "first_frame_image": first_frame_image_b64
-                }
-                print(f"Submitting video generation request...\nModel: {model}\nPrompt: {prompt[:100]}...\nDuration: {duration}s, Resolution: {resolution}, Optimizer: True")
-                response = requests.post(
-                    generator.base_url,
-                    headers=generator.headers,
-                    data=json.dumps(payload),
-                    timeout=30
-                )
-                if response.status_code != 200:
-                    raise Exception(f"Hailou API error: {response.status_code} - {response.text}")
-                response = response.json()
-                task_id = response.get("task_id")
-                if not task_id:
-                    print(f"Error: No task_id in response: {response}")
-                    continue
-                print(f"Task ID: {task_id}")
-                status_data = generator.poll_video_status(task_id)
-                file_id = status_data.get("file_id")
-                if not file_id:
-                    print(f"Error: No file_id in status response: {status_data}")
-                    continue
-                video_url = generator.get_video_url_from_file_id(file_id)
-                video_path = os.path.join(output_dir, f"segment_{i:03d}_{segment['start']}s_{segment['end']}s.mp4")
-                generator.download_video(video_url, video_path)
-                print(f"✅ Successfully generated video: {video_path}")
-                generated_videos.append({
-                    "segment": i,
-                    "start": segment["start"],
-                    "end": segment["end"],
-                    "prompt": prompt,
-                    "video_path": video_path,
-                    "video_url": video_url,
-                    "file_id": file_id,
-                    "task_id": task_id
-                })
-                print("Waiting 5 seconds before next request...")
-                time.sleep(5)
+                first_frame_image = f"data:image/png;base64,{first_frame_image_b64}"
+            
+            payload = {
+                "model": model,
+                "prompt": prompt,
+                "duration": duration,
+                "resolution": resolution,
+                "prompt_optimizer": True,
+                "first_frame_image": first_frame_image
+            }
+            
+            print(f"Submitting video generation request...\nModel: {model}\nPrompt: {prompt[:100]}...\nDuration: {duration}s, Resolution: {resolution}, Optimizer: False")
+            if i == 0:
+                print("[DEBUG] Payload for first segment:")
+                print(json.dumps(payload, indent=2)[:1000])
+            
+            response = requests.post(
+                generator.base_url,
+                headers=generator.headers,
+                data=json.dumps(payload),
+                timeout=30
+            )
+            if response.status_code != 200:
+                raise Exception(f"Hailou API error: {response.status_code} - {response.text}")
+            
+            response_data = response.json()
+            task_id = response_data.get("task_id")
+            if not task_id:
+                print(f"Error: No task_id in response: {response_data}")
+                continue
+            
+            print(f"Task ID: {task_id}")
+            status_data = generator.poll_video_status(task_id)
+            file_id = status_data.get("file_id")
+            if not file_id:
+                print(f"Error: No file_id in status response: {status_data}")
+                continue
+            
+            video_url = generator.get_video_url_from_file_id(file_id)
+            video_path = os.path.join(output_dir, f"segment_{i:03d}_{segment['start']}s_{segment['end']}s.mp4")
+            generator.download_video(video_url, video_path)
+            print(f"✅ Successfully generated video: {video_path}")
+            
+            generated_videos.append({
+                "segment": i,
+                "start": segment["start"],
+                "end": segment["end"],
+                "prompt": prompt,
+                "video_path": video_path,
+                "video_url": video_url,
+                "file_id": file_id,
+                "task_id": task_id
+            })
+            
+            print("Waiting 5 seconds before next request...")
+            time.sleep(5)
+            
         except Exception as e:
             print(f"❌ Error generating video for segment {i+1}: {e}")
             continue
+    
     summary_file = os.path.join(output_dir, "generation_summary.json")
     with open(summary_file, 'w', encoding='utf-8') as f:
         json.dump(generated_videos, f, indent=2, ensure_ascii=False)
+    
     print(f"\n{'='*60}")
     print(f"Generation complete!")
     print(f"Generated {len(generated_videos)} videos out of {len(segments)} segments")
     print(f"Results saved to: {output_dir}")
     print(f"Summary file: {summary_file}")
     print(f"{'='*60}")
+    
     return generated_videos
 
 def main():
@@ -382,7 +318,7 @@ def main():
     parser.add_argument("--api-key", help="Hailou API key (or set HAILOU_API_KEY in .env)")
     parser.add_argument("--output-dir", default="generated_videos", help="Output directory for generated videos")
     parser.add_argument("--num-segments", type=int, required=True, help="Number of segments to generate")
-    parser.add_argument("--subject-ref", required=True, help="Path to subject reference image (for S2V-01 model)")
+    parser.add_argument("--subject-ref", required=True, help="Path to subject reference image (for first segment)")
     parser.add_argument("--image-prompt", help="Path to prompt file for image generation (optional)")
     parser.add_argument("--image-out", default=None, help="Output path for generated image (optional)")
     parser.add_argument("--no-video", action="store_true", help="If set, only generate the image and do not run video generation.")
