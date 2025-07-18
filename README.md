@@ -45,11 +45,14 @@ The wrapper will automatically:
      ```sh
      pip install -r requirements.txt
      ```
-3. **Set up your API key:**
+3. **Set up your API keys:**
    - Create a `.env` file in the `video_analysis` directory with the following content:
      ```
      HAILOU_API_KEY=your_minimax_api_key_here
+     GOOGLE_API_KEY=your_gemini_or_google_api_key_here
+     OPENAI_API_KEY=your_openai_api_key_here
      ```
+   - If you add your Gemini/Google and OpenAI API keys to the `.env` file as shown above, you **do not need to specify them on the command line** when running the wrapper or other scripts—they will be loaded automatically.
 
 ## 3. Advanced/Manual Usage
 
