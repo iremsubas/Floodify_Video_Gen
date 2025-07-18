@@ -8,6 +8,7 @@ from typing import List, Dict, Any, Optional
 import base64
 import subprocess
 import tempfile
+import openai
 
 """
 Hailou Video Generator
@@ -28,6 +29,22 @@ load_dotenv(dotenv_path=".env")
 
 def encode_image_to_base64(image_path: str) -> str:
     """Encode image file to base64 data URL."""
+    ext = os.path.splitext(image_path)[1].lower()
+    if ext in ['.jpg', '.jpeg']:
+        mime = 'image/jpeg'
+    elif ext == '.png':
+        mime = 'image/png'
+    elif ext == '.webp':
+        mime = 'image/webp'
+    else:
+        mime = 'image/jpeg'  # Default fallback
+    with open(image_path, "rb") as img_file:
+        encoded = base64.b64encode(img_file.read()).decode("utf-8")
+    return f"data:{mime};base64,{encoded}"
+
+def encode_image_to_base64_data_url(image_path: str) -> str:
+    """Encode image file to base64 data URL for OpenAI input_image."""
+    import base64
     ext = os.path.splitext(image_path)[1].lower()
     if ext in ['.jpg', '.jpeg']:
         mime = 'image/jpeg'
@@ -129,66 +146,62 @@ def extract_last_frame(video_path: str, output_image_path: str) -> None:
     except subprocess.CalledProcessError as e:
         raise RuntimeError(f"Failed to extract last frame from {video_path}: {e.stderr.decode()}")
 
-def generate_image_with_subject_reference(prompt_file: str, subject_ref: str, api_key: str, output_path: str = "generated_image.png", aspect_ratio: str = "16:9"):
-    """Generate an image using MiniMax image API with a prompt and subject reference."""
-    url = "https://api.minimax.io/v1/image_generation"
+def upload_image_and_get_file_id(client, image_path: str) -> str:
+    """Upload an image to OpenAI Files API and return the file_id."""
+    with open(image_path, "rb") as file_content:
+        result = client.files.create(
+            file=file_content,
+            purpose="vision",
+        )
+        return result.id
+
+
+def generate_image_with_gpt_image_1_responses(prompt_file: str, api_key: str, output_path: str = "generated_image.png", character_ref_image: Optional[str] = None, first_frame_image: Optional[str] = None):
+    """Generate an image using OpenAI responses.create with image_generation tool, optionally using two images as base64 data URLs."""
+    import base64
+    import os
+    client = openai.OpenAI(api_key=api_key)
     with open(prompt_file, "r", encoding="utf-8") as f:
         prompt = f.read().strip()
-    
-    # Prepare subject reference (base64 or URL)
-    if os.path.isfile(subject_ref):
-        ext = os.path.splitext(subject_ref)[1].lower()
-        if ext in ['.jpg', '.jpeg']:
-            mime = 'image/jpeg'
-        elif ext == '.png':
-            mime = 'image/png'
-        elif ext == '.webp':
-            mime = 'image/webp'
-        else:
-            mime = 'image/jpeg'
-        with open(subject_ref, "rb") as img_file:
-            encoded = base64.b64encode(img_file.read()).decode("utf-8")
-        subject_reference = [{
-            "type": "character",
-            "image_file": f"data:{mime};base64,{encoded}"
-        }]
-    else:
-        subject_reference = [{
-            "type": "character",
-            "image_file": subject_ref
-        }]
-    
-    payload = {
-        "model": "image-01",
-        "prompt": prompt,
-        "aspect_ratio": "9:16",
-        "response_format": "url",
-        "n": 1,
-        "prompt_optimizer": True,
-        "subject_reference": subject_reference
-    }
-    
-    headers = {
-        'Authorization': f'Bearer {api_key}',
-        'Content-Type': 'application/json'
-    }
-    
-    response = requests.post(url, headers=headers, data=json.dumps(payload))
-    if response.status_code != 200:
-        raise Exception(f"Image API error: {response.status_code} - {response.text}")
-    
-    data = response.json()
-    if not isinstance(data.get("data"), dict) or not data["data"].get("image_urls"):
-        print("Image generation API response:", json.dumps(data, indent=2))
-        raise Exception(f"No image URL in response: {data}")
-    
-    image_url = data["data"]["image_urls"][0]
-    
-    # Download the image
-    img_resp = requests.get(image_url)
-    img_resp.raise_for_status()
+    content = [
+        {"type": "input_text", "text": prompt}
+    ]
+    if character_ref_image:
+        abs_path1 = os.path.abspath(character_ref_image)
+        data_url1 = encode_image_to_base64_data_url(abs_path1)
+        content.append({
+            "type": "input_image",
+            "image_url": data_url1
+        })
+    if first_frame_image:
+        abs_path2 = os.path.abspath(first_frame_image)
+        data_url2 = encode_image_to_base64_data_url(abs_path2)
+        content.append({
+            "type": "input_image",
+            "image_url": data_url2
+        })
+    input_list = [
+        {
+            "role": "user",
+            "content": content
+        }
+    ]
+    response = client.responses.create(
+        model="gpt-4.1-mini",
+        input=input_list,
+        tools=[{"type": "image_generation"}]
+    )
+    # Extract base64 image from response
+    image_data = [
+        output.result
+        for output in response.output
+        if output.type == "image_generation_call"
+    ]
+    if not image_data:
+        raise Exception("No image data returned from OpenAI responses.create")
+    image_base64 = image_data[0]
     with open(output_path, "wb") as f:
-        f.write(img_resp.content)
+        f.write(base64.b64decode(image_base64))
     print(f"Image generated and saved to {output_path}")
 
 def generate_videos_from_analysis(
@@ -313,24 +326,31 @@ def generate_videos_from_analysis(
     return generated_videos
 
 def main():
-    parser = argparse.ArgumentParser(description="Generate videos from analysis results using Hailou API")
+    parser = argparse.ArgumentParser(description="Generate videos from analysis results using Hailou API. For first frame image generation, uses OpenAI gpt-image-1.")
     parser.add_argument("analysis_file", help="Path to the analysis JSON file from video_analyzer_ffmpeg_hailou.py")
     parser.add_argument("--api-key", help="Hailou API key (or set HAILOU_API_KEY in .env)")
     parser.add_argument("--output-dir", default="generated_videos", help="Output directory for generated videos")
     parser.add_argument("--num-segments", type=int, required=True, help="Number of segments to generate")
-    parser.add_argument("--subject-ref", required=True, help="Path to subject reference image (for first segment)")
+    parser.add_argument("--subject-ref", required=True, help="Path to subject reference image (for first segment, only used for video)")
+    parser.add_argument("--character-ref", help="Path to character reference image (for image generation, first image)")
+    parser.add_argument("--first-frame", help="Path to first frame image (for image generation, second image)")
     parser.add_argument("--image-prompt", help="Path to prompt file for image generation (optional)")
     parser.add_argument("--image-out", default=None, help="Output path for generated image (optional)")
     parser.add_argument("--no-video", action="store_true", help="If set, only generate the image and do not run video generation.")
+    parser.add_argument("--openai-api-key", default=None, help="OpenAI API key (or set OPENAI_API_KEY in .env)")
+    parser.add_argument("--image-size", default="1024x1536", help="Image size for gpt-image-1 (default: 1024x1536)")
     args = parser.parse_args()
 
     api_key = args.api_key or os.getenv("HAILOU_API_KEY")
+    openai_api_key = args.openai_api_key or os.getenv("OPENAI_API_KEY")
     if not api_key:
         raise ValueError("Hailou API key is required.")
 
-    # If --image-prompt is provided, generate the image first
+    # If --image-prompt is provided, generate the image first using OpenAI
     generated_image_path = None
     if args.image_prompt:
+        if not openai_api_key:
+            raise ValueError("OpenAI API key is required for image generation.")
         if args.image_out:
             generated_image_path = args.image_out
         else:
@@ -338,7 +358,10 @@ def main():
             tmp = tempfile.NamedTemporaryFile(delete=False, suffix=".png")
             generated_image_path = tmp.name
             tmp.close()
-        generate_image_with_subject_reference(args.image_prompt, args.subject_ref, api_key, generated_image_path)
+        generate_image_with_gpt_image_1_responses(
+            args.image_prompt, openai_api_key, generated_image_path,
+            character_ref_image=args.character_ref, first_frame_image=args.first_frame
+        )
         if args.no_video:
             return 0
         # Use the generated image as the subject_ref for video generation

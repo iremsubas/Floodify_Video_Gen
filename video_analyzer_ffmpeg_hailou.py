@@ -156,7 +156,7 @@ Begin your description below:
         descriptions.append(response.text.strip())
     # Combine descriptions into a single prompt
     combined = " ".join(descriptions)
-    image_prompt = f"Create an image with these characteristics: {combined}"
+    image_prompt = f"Create an image with these characteristics: Replace the person in the second image with the person in the first image keep the same clothes the person in the first image is wearing. {combined}"
     return image_prompt
 
 def analyze_video_with_ffmpeg_segments(video_path, api_key, prompt_template, segment_duration=5, model_name="gemini-2.5-pro", output_file=None):
@@ -224,7 +224,6 @@ def main():
     parser.add_argument("video_path", help="Path to the video file")
     parser.add_argument("--api-key", help="Google API key (or set GOOGLE_API_KEY in env)")
     parser.add_argument("--segment-duration", type=int, default=5, help="Segment duration in seconds (default: 5)")
-    parser.add_argument("--director-mode", action="store_true", help="Use director mode with enhanced camera control prompts")
     parser.add_argument(
         "--prompt",
         help="Prompt template for each segment. Use {start}, {end}, and {segment_index} for placeholders."
@@ -234,104 +233,29 @@ def main():
     parser.add_argument("--image-prompt-out", help="Output file for generated image prompt from first frames")
     args = parser.parse_args()
 
-    # Set default prompt based on director mode
+    # Set default prompt if not provided
     if not args.prompt:
-        if args.director_mode:
-            args.prompt = (
-                """[Director Prompt]
-Generate a highly detailed, photorealistic video sequence for a video generation model with director controls, based on this {segment_duration}-second segment (from {start:.2f}s to {end:.2f}s).
-
-For each distinct shot within this segment, provide a precise timeline entry using the format:
-[Start Time]-[End Time]: [Camera Movement(s), Shot Type] [Detailed description of action, subjects, and environment, including visual style and lighting]
-
-**Key Directives for Hailou Model:**
-
-* **Camera Movements:** Use up to three explicit camera movement commands in square brackets for each shot. Choose from:
-    * `[Pan left]` / `[Pan right]` (camera pivots horizontally)
-    * `[Tilt up]` / `[Tilt down]` (camera pivots vertically)
-    * `[Zoom in]` / `[Zoom out]` (focal length change)
-    * `[Truck left]` / `[Truck right]` (camera moves horizontally, parallel to subject)
-    * `[Push in]` / `[Pull out]` (camera moves closer/further from subject)
-    * `[Pedestal up]` / `[Pedestal down]` (camera moves vertically)
-    * `[Tracking shot]` (camera follows a moving subject)
-    * `[Static shot]` (camera remains stationary)
-    * `[Cut]` (indicates a sharp transition to a new shot)
-    * `[Shake]` (simulates handheld camera instability)
-* **Shot Types:** Specify classic shot types like `Wide shot`, `Medium shot`, `Close-up`, `Extreme close-up`, `Aerial shot`, `Over-the-shoulder`, `Point-of-view (POV)`.
-* **Detail and Specificity:**
-    * Describe *exactly* what is visible and what is happening.
-    * Include **specific actions** and **movements** of subjects.
-    * Detail the **environment and setting** (e.g., "lush green forest," "desert with red rock formations," "bustling city street at night").
-    * Mention **landmarks** if present (e.g., "Eiffel Tower in the background," "Christ the Redeemer statue").
-    * Clearly indicate **scene changes or transitions** within the segment.
-    * Specify **lighting and atmosphere**: "golden hour," "dramatic backlighting," "soft, diffused light," "neon reflections," "overcast sky."
-    * Include **visual style elements** if applicable, e.g., "cinematic," "photorealistic," "dreamy," "gritty."
-* **Exclusions:** Do NOT mention clothing, appearance, or physical looks of subjects. Focus solely on their actions and the visual scene.
-* **Conciseness:** Each shot description should be 1-2 concise, impactful sentences, packed with visual information.
-
-**Example Timeline Entries:**
-
-0–2s: [Wide shot, Pan left] A helicopter cockpit with a pilot speaking into a headset, city skyline visible through the window, illuminated by the warm glow of sunset.
-2–4s: [Cut, Aerial shot, Zoom in] Camera flies over lush green mountains, revealing the Christ the Redeemer statue atop a peak under a clear blue sky, casting a long shadow.
-4–6s: [Tracking shot, Pedestal up] Camera circles the statue, city and ocean in the background, with the sunlight glinting off the statue's surface."""
-            )
-        else:
-            args.prompt = (
-#                 """Analyze this {segment_duration}-second video segment (from {start:.2f}s to {end:.2f}s) and create a detailed description for video generation.
-
-# Describe what happens in this segment with the following focus:
-# 1. **Camera movements and shot types** (pan, tilt, zoom, tracking, static, wide shot, close-up, etc.)
-# 2. **Subjects and their actions** (what people or objects are doing)
-# 3. **Environment and setting** (background, location, lighting, atmosphere)
-# 4. **Scene changes or transitions** (cuts, fades, etc.)
-
-# Be specific about:
-# - Camera work: "pan left", "zoom in", "tracking shot", "static shot"
-# - Actions: "speaking into microphone", "walking through doorway", "dancing energetically"
-# - Environment: "brightly lit room", "dimly lit hallway", "outdoor setting"
-# - Lighting: "soft lighting", "purple ambient light", "natural daylight"
-
-# Format your response as a clear, detailed description suitable for video generation.
-# Keep it concise but informative - enough detail for AI video generation without being overwhelming.
-# Do not mention clothing or appearance - focus on actions, context, and camera work."""
-                # """
-                # Focus on: 
-                # 1. What subjects or objects are visible and what they are doing 
-                # 2. Any scene changes, cuts, or transitions that occur within this segment 
-                # 3. Camera movements (pan, tilt, zoom, tracking, stationary) and their direction 
-                # 4. Background environment and setting details 
-                # 5. Any actions, movements, or events that take place 
-                # Be specific about timing within the segment (e.g., 'at 2 seconds into this segment...'). 
-                # If there are multiple scenes or cuts within this segment, describe each one separately with their timing. 
-                # Do not include any description of the subject's appearance, clothing, or physical looks. 
-                # Focus on what is happening, the context, and the camera work, not how the subject looks. 
-                # Write this as a clear, detailed description suitable for video generation.
-                # """
-            """Analyze this {segment_duration}-second video segment (from {start:.2f}s to {end:.2f}s) and create a detailed timeline description for video generation.
-            
-            Format your response as a timeline with specific time ranges and shot descriptions, like this example:
-            "0–2s: Wide shot of a dark ocean horizon under a starry dawn sky."
-            "2–4s: The sun's rim appears, coloring clouds pastel pink."
-            "4–6s: Golden light ripples on gentle waves; a seagull flies across."
-            "6–8s: Close-up pan on a silhouette of a sailboat drifting; sky fades to bright blue."
-            
-            For each time range, include:
-            1. Camera shot type and movement (wide shot, close-up, pan, tilt, zoom, tracking, dolly, etc.)
-            2. Subjects and their actions (what people/objects are doing)
-            3. Environment and setting details (landmarks, buildings, landscape, weather)
-            4. Any scene transitions or cuts
-            
-            Be specific about:
-            - Camera movements: "pan left", "zoom in", "tracking shot", "static shot"
-            - Actions: "speaking into microphone", "flying over", "circling around"
-            - Landmarks: "Christ the Redeemer statue", "mountain peak", "city skyline"
-            - Environment: "lush green forest", "blue sky with clouds", "helicopter cockpit"
-            
-            Use this exact format: "0–2s: [detailed shot description with camera movement and action]"
-            Keep descriptions concise but informative - enough detail for video generation without being overwhelming.
-            Do not mention clothing or appearance - focus on actions, context, and camera work.
-            """
-            )
+        args.prompt = (
+            "Analyze this {segment_duration}-second video segment (from {start:.2f}s to {end:.2f}s) and create a detailed timeline description for video generation.\n\n"
+            "Format your response as a timeline with specific time ranges and shot descriptions, like this example:\n"
+            '"0–2s: Wide shot of a dark ocean horizon under a starry dawn sky."\n'
+            '"2–4s: The sun\'s rim appears, coloring clouds pastel pink."\n'
+            '"4–6s: Golden light ripples on gentle waves; a seagull flies across."\n'
+            '"6–8s: Close-up pan on a silhouette of a sailboat drifting; sky fades to bright blue."\n\n'
+            "For each time range, include:\n"
+            "1. Camera shot type and movement (wide shot, close-up, pan, tilt, zoom, tracking, dolly, etc.)\n"
+            "2. Subjects and their actions (what people/objects are doing)\n"
+            "3. Environment and setting details (landmarks, buildings, landscape, weather)\n"
+            "4. Any scene transitions or cuts\n\n"
+            "Be specific about:\n"
+            "- Camera movements: 'pan left', 'zoom in', 'tracking shot', 'static shot'\n"
+            "- Actions: 'speaking into microphone', 'flying over', 'circling around'\n"
+            "- Landmarks: 'Christ the Redeemer statue', 'mountain peak', 'city skyline'\n"
+            "- Environment: 'lush green forest', 'blue sky with clouds', 'helicopter cockpit'\n\n"
+            "Use this exact format: '0–2s: [detailed shot description with camera movement and action]'\n"
+            "Keep descriptions concise but informative - enough detail for video generation without being overwhelming.\n"
+            "Do not mention clothing or appearance - focus on actions, context, and camera work."
+        )
 
     api_key = args.api_key or os.getenv("GOOGLE_API_KEY")
     if not api_key:
@@ -344,7 +268,7 @@ For each distinct shot within this segment, provide a precise timeline entry usi
         with open(args.image_prompt_out, "w", encoding="utf-8") as f:
             f.write(image_prompt)
         print(f"Image prompt written to {args.image_prompt_out}")
-        return
+    # Do NOT return here; always continue to segment analysis
 
     analyze_video_with_ffmpeg_segments(
         args.video_path,
